@@ -1,0 +1,9 @@
+# Live Network Monitor - Python Dependencies
+
+# Web Framework
+Flask==3.0.0
+
+# Optional: For enhanced development/debugging
+# Uncomment if needed for development
+# flask-cors==4.0.0     # Enable CORS if needed
+# python-dotenv==1.0.0  # Environment variable support
