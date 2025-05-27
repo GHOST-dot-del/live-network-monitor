@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Real-Time Network Monitoring Tool with Live Dashboard Updates
-Updates browser within 2-3 seconds of any CSV changes
+Updates browser within 25 seconds of any CSV changes
 """
 
 import subprocess
@@ -11,7 +11,7 @@ import csv
 import os
 import threading
 from datetime import datetime
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 # Global variable to track CSV file changes
 csv_last_modified = 0
@@ -37,27 +37,26 @@ def initialize_log(filename):
     if not os.path.exists(filename):
         with open(filename, mode='w', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(["Timestamp", "IP Address", "Status"])
+            writer.writerow(["Timestamp", "Device Name", "IP Address", "Status"])
 
-def log_status(filename, timestamp, ip_address, status):
+def log_status(filename, timestamp, device_name, ip_address, status):
     """
-    Log ping result to CSV file and update modification tracker
+    Log ping result to CSV file with device name
     """
     global csv_last_modified
     
     with open(filename, mode='a', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow([timestamp, ip_address, status])
+        writer.writerow([timestamp, device_name, ip_address, status])
     
     # Update the modification time tracker
     csv_last_modified = time.time()
 
-def monitor_device_background(ip_address, check_interval=30, log_file="network_log.csv"):
+def monitor_device_background(device_name, ip_address, check_interval=30, log_file="network_log.csv"):
     """
-    Background monitoring function that runs in a separate thread
+    Background monitoring function for a single device
     """
-    print(f"🔍 Starting real-time monitoring of {ip_address} every {check_interval} seconds...")
-    initialize_log(log_file)
+    print(f"🔍 Starting monitoring of {device_name} ({ip_address}) every {check_interval} seconds...")
 
     try:
         while True:
@@ -67,15 +66,15 @@ def monitor_device_background(ip_address, check_interval=30, log_file="network_l
             
             # Log to console
             status_emoji = "✅" if is_up else "❌"
-            print(f"[{timestamp}] {status_emoji} {ip_address} is {status}")
+            print(f"[{timestamp}] {status_emoji} {device_name} ({ip_address}) is {status}")
             
-            # Log to CSV (this will trigger real-time update)
-            log_status(log_file, timestamp, ip_address, status)
+            # Log to CSV
+            log_status(log_file, timestamp, device_name, ip_address, status)
             
             time.sleep(check_interval)
             
     except Exception as e:
-        print(f"⚠️  Monitoring error: {e}")
+        print(f"⚠️  Monitoring error for {device_name}: {e}")
 
 # ============================================================================
 # FLASK WEB DASHBOARD WITH REAL-TIME UPDATES
@@ -110,8 +109,6 @@ def check_updates():
         "message": "No updates"
     })
 
-from flask import request
-
 @app.route('/')
 def dashboard():
     """
@@ -141,25 +138,28 @@ def dashboard():
         </html>
         """
 
-    # Show only last 20 entries
+    # Show only last 20 entries, newest first
     recent_data = data[-20:] if len(data) > 20 else data
+    if len(recent_data) > 1:  # Keep headers at top
+        headers = recent_data[0]  # Save headers
+        data_rows = recent_data[1:]  # Get data rows
+        data_rows.reverse()  # Reverse the order (newest first)
+        recent_data = [headers] + data_rows  # Combine back together
 
-    # Get current status from most recent entry
+    # Get current status from most recent entry (now it's the first data row!)
     current_status = "Starting..."
-    if len(recent_data) > 1:  # Make sure we have headers + data
-        headers = recent_data[0]  # Save the header row
-        data_rows = recent_data[1:]  # Get all data rows (without headers)
-        data_rows.reverse()  # Reverse so newest is first
-        recent_data = [headers] + data_rows  # Put headers back at top
+    if len(recent_data) > 1:
+        last_row = recent_data[1]  # First data row = newest entry
+        current_status = last_row[3] if len(last_row) > 3 else "Unknown"  # Status is now column 3
 
-    # Count UP and DOWN
+    # Count UP and DOWN (updated for new CSV format)
     up_count = 0
     down_count = 0
     for row in recent_data[1:]:  # skip header
-        if len(row) > 2:
-            if row[2].upper() == "UP":
+        if len(row) > 3:  # Now we have 4 columns: Timestamp, Device, IP, Status
+            if row[3].upper() == "UP":  # Status is now column 3 (was column 2)
                 up_count += 1
-            elif row[2].upper() == "DOWN":
+            elif row[3].upper() == "DOWN":
                 down_count += 1
 
     # Calculate uptime percentage
@@ -345,11 +345,11 @@ def dashboard():
         </div>
         
         <div class="container">
-            <h1>🚀 Real-Time Network Monitor</h1>
+            <h1>🚀 Multi-Device Network Monitor</h1>
             
             <div class="summary">
                 <div class="current-status">
-                    <strong>Current Status:</strong> 
+                    <strong>Network Status:</strong> 
                     <span style="color: {status_color}; font-weight: bold; font-size: 28px;">
                         {current_status}
                     </span>
@@ -393,13 +393,15 @@ def dashboard():
             html += "<tr>" + "".join([f"<th>{cell}</th>" for cell in row]) + "</tr>"
         else:
             # Add class for potential new entry animation
-            row_class = "new-entry" if i == len(recent_data) - 1 else ""
+            row_class = "new-entry" if i == 1 else ""  # First data row is newest
             html += f"<tr class='{row_class}'>"
             for j, cell in enumerate(row):
-                if j == 2 and cell.upper() == "UP":
+                if j == 3 and cell.upper() == "UP":  # Status is column 3
                     html += f"<td class='status-up' style='text-align: center;'>✅ {cell}</td>"
-                elif j == 2 and cell.upper() == "DOWN":
+                elif j == 3 and cell.upper() == "DOWN":  # Status is column 3
                     html += f"<td class='status-down' style='text-align: center;'>❌ {cell}</td>"
+                elif j == 1:  # Device Name column - make it bold
+                    html += f"<td style='font-weight: bold; color: #007bff;'>{cell}</td>"
                 else:
                     html += f"<td>{cell}</td>"
             html += "</tr>"
@@ -408,9 +410,10 @@ def dashboard():
             </table>
             
             <div class="footer">
-                <p>🚀 Real-Time Network Monitoring System</p>
-                <p>⚡ Updates automatically within 2-3 seconds of network changes</p>
-                <p>📊 Showing last 20 monitoring results</p>
+                <p>🚀 Multi-Device Network Monitoring System</p>
+                <p>⚡ Monitoring: Home Router, Google DNS, Cloudflare DNS, OpenDNS</p>
+                <p>🔄 Updates automatically within 25 seconds of network changes</p>
+                <p>📊 Showing last 20 monitoring results (newest first)</p>
             </div>
         </div>
 
@@ -485,56 +488,72 @@ def api_status():
             if len(data) > 1:
                 last_row = data[-1]
                 return jsonify({
-                    "status": last_row[2] if len(last_row) > 2 else "Unknown",
+                    "status": last_row[3] if len(last_row) > 3 else "Unknown",
                     "timestamp": last_row[0] if len(last_row) > 0 else "Unknown",
-                    "ip": last_row[1] if len(last_row) > 1 else "Unknown",
+                    "device": last_row[1] if len(last_row) > 1 else "Unknown",
+                    "ip": last_row[2] if len(last_row) > 2 else "Unknown",
                     "realtime": True
                 })
-    return jsonify({"status": "No data", "timestamp": "Unknown", "ip": "Unknown", "realtime": False})
+    return jsonify({"status": "No data", "timestamp": "Unknown", "device": "Unknown", "ip": "Unknown", "realtime": False})
 
 # ============================================================================
 # THREADING AND MAIN FUNCTIONS
 # ============================================================================
 
-def start_monitoring_thread(ip_address, interval=30):
+def start_monitoring_thread(device_name, ip_address, interval=30):
     """
-    Start monitoring in background thread
+    Start monitoring in background thread for a single device
     """
     monitor_thread = threading.Thread(
         target=monitor_device_background, 
-        args=(ip_address, interval),
+        args=(device_name, ip_address, interval),
         daemon=True
     )
     monitor_thread.start()
-    print(f"✅ Real-time monitoring thread started for {ip_address}")
+    print(f"✅ Monitoring thread started for {device_name} ({ip_address})")
     return monitor_thread
 
 def main():
     """
     Main function - starts both monitoring and web dashboard
     """
-    print("🚀 Real-Time Network Monitoring System")
+    print("🚀 Multi-Device Network Monitoring System")
     print("=" * 55)
-    print("⚡ Features: Instant browser updates on network changes")
+    print("⚡ Features: Real-time monitoring of multiple devices")
     print("🔧 Starting up...")
     
-    # Configuration
-    monitored_ip = "8.8.8.8"
+    # Configuration - Multiple Devices
+    monitored_devices = {
+        "Home Router": "10.0.0.1",
+        "Google DNS": "8.8.8.8", 
+        "Cloudflare DNS": "1.1.1.1",
+        "OpenDNS": "208.67.222.222"
+    }
     ping_interval = 30
     
-    # Start background monitoring
-    print(f"🔍 Initializing real-time monitoring for {monitored_ip}...")
-    monitoring_thread = start_monitoring_thread(monitored_ip, ping_interval)
+    # Initialize CSV log file
+    initialize_log("network_log.csv")
+    
+    # Start background monitoring for all devices
+    print(f"🔍 Initializing monitoring for {len(monitored_devices)} devices...")
+    monitoring_threads = []
+
+    for device_name, ip_address in monitored_devices.items():
+        thread = start_monitoring_thread(device_name, ip_address, ping_interval)
+        monitoring_threads.append(thread)
+        time.sleep(1)  # Small delay between starting threads
+
+    print(f"✅ All {len(monitored_devices)} monitoring threads started")
     
     # Give monitoring a moment to start
-    time.sleep(1)
+    time.sleep(2)
     
     # Start web dashboard
     print("🌐 Starting real-time web dashboard...")
     print(f"📊 Dashboard: http://127.0.0.1:5000")
-    print(f"⚡ Real-time updates: 2-3 second delay")
+    print(f"⚡ Real-time updates: 25-second polling")
     print(f"🔄 Auto-refresh: When CSV changes detected")
-    print(f"⏹️  Press Ctrl+C to stop")
+    print(f"⏹️  Press Ctrl+C to stop all monitoring")
     print("=" * 55)
     
     try:
@@ -547,7 +566,7 @@ def main():
     except KeyboardInterrupt:
         print("\n🛑 Shutdown signal received...")
         print("💾 Monitoring data saved to network_log.csv")
-        print("👋 Real-time monitoring system stopped")
+        print("👋 Multi-device monitoring system stopped")
 
 if __name__ == "__main__":
     main()
